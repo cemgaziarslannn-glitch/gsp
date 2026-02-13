@@ -141,7 +141,7 @@ async function processQR(qrId){
       location.lng
     );
 
-    if(distance <= 30){
+    if(distance <= 5){
       setStatus("GÜVENLİ DEVRİYE","good");
     } else {
       setStatus("GÜVENSİZ DEVRİYE","bad");
