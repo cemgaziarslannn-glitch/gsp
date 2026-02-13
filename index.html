@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CGA QR Konum Güvenlik Test</title>
+
+<script src="https://unpkg.com/html5-qrcode"></script>
+
+<style>
+body{
+  background:#0b1a27;
+  color:white;
+  text-align:center;
+  font-family:Arial;
+}
+#reader{
+  width:300px;
+  margin:auto;
+}
+h2{
+  margin-top:20px;
+}
+.statusBox{
+  margin-top:20px;
+  font-size:22px;
+  font-weight:bold;
+}
+.good{color:#00ff88;}
+.bad{color:#ff4444;}
+.info{color:#ffaa00;}
+button{
+  padding:10px 20px;
+  margin-top:15px;
+}
+</style>
+</head>
+<body>
+
+<h2>QR Konum Güvenli Devriye Sistemi</h2>
+<div id="reader"></div>
+<div id="status" class="statusBox info">QR okutun...</div>
+<button onclick="resetSystem()">Sıfırla</button>
+
+<script type="module">
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getDatabase, ref, set, get } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAUjb4CBSZxjCTxpx8S_rGLOLDeRtDTs7U",
+  authDomain: "bencga-db51b.firebaseapp.com",
+  databaseURL: "https://bencga-db51b-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "bencga-db51b",
+  storageBucket: "bencga-db51b.firebasestorage.app",
+  messagingSenderId: "568702678520",
+  appId: "1:568702678520:web:82d3c6a98216990fa3d20d"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+let currentQR = null;
+let referenceExists = false;
+let locationCount = 0;
+let locations = [];
+
+function setStatus(text,type="info"){
+  const el = document.getElementById("status");
+  el.className = "statusBox " + type;
+  el.innerText = text;
+}
+
+function getLocation(){
+  return new Promise((resolve,reject)=>{
+    navigator.geolocation.getCurrentPosition(
+      pos=>{
+        resolve({
+          lat:pos.coords.latitude,
+          lng:pos.coords.longitude,
+          accuracy:pos.coords.accuracy
+        });
+      },
+      ()=>reject(),
+      {enableHighAccuracy:true}
+    );
+  });
+}
+
+function calculateAverage(points){
+  let lat=0,lng=0;
+  points.forEach(p=>{
+    lat+=p.lat;
+    lng+=p.lng;
+  });
+  return {
+    lat:lat/points.length,
+    lng:lng/points.length
+  };
+}
+
+function getDistance(lat1,lon1,lat2,lon2){
+  const R=6371e3;
+  const toRad=x=>x*Math.PI/180;
+  const φ1=toRad(lat1);
+  const φ2=toRad(lat2);
+  const Δφ=toRad(lat2-lat1);
+  const Δλ=toRad(lon2-lon1);
+  const a=Math.sin(Δφ/2)**2+
+    Math.cos(φ1)*Math.cos(φ2)*
+    Math.sin(Δλ/2)**2;
+  const c=2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+  return R*c;
+}
+
+async function processQR(qrId){
+
+  currentQR = qrId;
+  const pointRef = ref(db,"points/"+qrId+"/reference");
+  const snapshot = await get(pointRef);
+
+  if(!snapshot.exists()){
+    referenceExists = false;
+    locationCount = 0;
+    locations = [];
+    setStatus("Yeni QR. 3 kez aynı noktada okutun.","info");
+  } else {
+    referenceExists = true;
+    const reference = snapshot.val();
+    const location = await getLocation();
+
+    if(location.accuracy > 50){
+      setStatus("GPS doğruluğu zayıf. Tekrar deneyin.","bad");
+      return;
+    }
+
+    const distance = getDistance(
+      reference.lat,
+      reference.lng,
+      location.lat,
+      location.lng
+    );
+
+    if(distance <= 30){
+      setStatus("GÜVENLİ DEVRİYE","good");
+    } else {
+      setStatus("GÜVENSİZ DEVRİYE","bad");
+    }
+  }
+}
+
+async function registerReference(){
+
+  const location = await getLocation();
+
+  if(location.accuracy > 50){
+    setStatus("GPS doğruluğu zayıf. Sabit durun.","bad");
+    return;
+  }
+
+  locations.push(location);
+  locationCount++;
+
+  setStatus(locationCount + "/3 konum alındı","info");
+
+  if(locationCount === 3){
+    const avg = calculateAverage(locations);
+
+    await set(ref(db,"points/"+currentQR+"/reference"),{
+      lat:avg.lat,
+      lng:avg.lng,
+      createdAt:Date.now()
+    });
+
+    setStatus("Referans Kaydedildi ✅","good");
+  }
+}
+
+function resetSystem(){
+  currentQR = null;
+  referenceExists = false;
+  locationCount = 0;
+  locations = [];
+  setStatus("Sistem sıfırlandı.","info");
+}
+
+window.onScanSuccess = async(decodedText)=>{
+  if(!currentQR){
+    await processQR(decodedText);
+  } else if(!referenceExists && locationCount < 3){
+    await registerReference();
+  }
+};
+
+const html5QrcodeScanner = new Html5QrcodeScanner(
+  "reader",{fps:10,qrbox:250}
+);
+html5QrcodeScanner.render(window.onScanSuccess);
+
+</script>
+</body>
+</html>
