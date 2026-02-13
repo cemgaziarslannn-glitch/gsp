@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CGA QR Konum Güvenlik Test</title>
+<title>CGA Profesyonel Devriye</title>
 
 <script src="https://unpkg.com/html5-qrcode"></script>
 
@@ -14,38 +14,25 @@ body{
   text-align:center;
   font-family:Arial;
 }
-#reader{
-  width:300px;
-  margin:auto;
-}
-h2{
-  margin-top:20px;
-}
-.statusBox{
-  margin-top:20px;
-  font-size:22px;
-  font-weight:bold;
-}
+#reader{width:300px;margin:auto;}
+.status{margin-top:20px;font-size:22px;font-weight:bold;}
 .good{color:#00ff88;}
 .bad{color:#ff4444;}
 .info{color:#ffaa00;}
-button{
-  padding:10px 20px;
-  margin-top:15px;
-}
+button{padding:10px 20px;margin-top:15px;}
 </style>
 </head>
 <body>
 
-<h2>QR Konum Güvenli Devriye Sistemi</h2>
+<h2>QR Konum Güvenli Devriye</h2>
 <div id="reader"></div>
-<div id="status" class="statusBox info">QR okutun...</div>
+<div id="status" class="status info">QR okutun...</div>
 <button onclick="resetSystem()">Sıfırla</button>
 
 <script type="module">
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getDatabase, ref, set, get } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+import { getDatabase, ref, set, get, push } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAUjb4CBSZxjCTxpx8S_rGLOLDeRtDTs7U",
@@ -54,22 +41,22 @@ const firebaseConfig = {
   projectId: "bencga-db51b",
   storageBucket: "bencga-db51b.firebasestorage.app",
   messagingSenderId: "568702678520",
-  appId: "1:568702678520:web:82d3c6a98216990fa3d20d"
+  appId: "1:568702678520:web:82d3c6a98216990fa3d20d",
+  measurementId: "G-703BGXWTFN"
 };
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
-let currentQR = null;
-let referenceExists = false;
-let locationCount = 0;
-let locations = [];
+let scanLock = false;
 
 function setStatus(text,type="info"){
   const el = document.getElementById("status");
-  el.className = "statusBox " + type;
-  el.innerText = text;
+  el.className="status "+type;
+  el.innerText=text;
 }
+
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
 function getLocation(){
   return new Promise((resolve,reject)=>{
@@ -87,19 +74,7 @@ function getLocation(){
   });
 }
 
-function calculateAverage(points){
-  let lat=0,lng=0;
-  points.forEach(p=>{
-    lat+=p.lat;
-    lng+=p.lng;
-  });
-  return {
-    lat:lat/points.length,
-    lng:lng/points.length
-  };
-}
-
-function getDistance(lat1,lon1,lat2,lon2){
+function distance(lat1,lon1,lat2,lon2){
   const R=6371e3;
   const toRad=x=>x*Math.PI/180;
   const φ1=toRad(lat1);
@@ -107,95 +82,98 @@ function getDistance(lat1,lon1,lat2,lon2){
   const Δφ=toRad(lat2-lat1);
   const Δλ=toRad(lon2-lon1);
   const a=Math.sin(Δφ/2)**2+
-    Math.cos(φ1)*Math.cos(φ2)*
-    Math.sin(Δλ/2)**2;
+  Math.cos(φ1)*Math.cos(φ2)*
+  Math.sin(Δλ/2)**2;
   const c=2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
   return R*c;
 }
 
-async function processQR(qrId){
+async function createReference(qrId){
+  setStatus("Referans oluşturuluyor (5 ölçüm)...","info");
+  let points=[];
 
-  currentQR = qrId;
-  const pointRef = ref(db,"points/"+qrId+"/reference");
-  const snapshot = await get(pointRef);
+  while(points.length<5){
+    const loc=await getLocation();
 
-  if(!snapshot.exists()){
-    referenceExists = false;
-    locationCount = 0;
-    locations = [];
-    setStatus("Yeni QR. 3 kez aynı noktada okutun.","info");
-  } else {
-    referenceExists = true;
-    const reference = snapshot.val();
-    const location = await getLocation();
-
-    if(location.accuracy > 50){
-      setStatus("GPS doğruluğu zayıf. Tekrar deneyin.","bad");
-      return;
+    if(loc.accuracy>25){
+      setStatus("GPS sabitleniyor...","info");
+      await sleep(1000);
+      continue;
     }
 
-    const distance = getDistance(
-      reference.lat,
-      reference.lng,
-      location.lat,
-      location.lng
-    );
-
-    if(distance <= 30){
-      setStatus("GÜVENLİ DEVRİYE","good");
-    } else {
-      setStatus("GÜVENSİZ DEVRİYE","bad");
-    }
+    points.push(loc);
+    setStatus(points.length+"/5 ölçüm alındı","info");
+    await sleep(800);
   }
+
+  points.sort((a,b)=>a.accuracy-b.accuracy);
+  points.pop(); // en kötü accuracy'yi at
+
+  let lat=0,lng=0;
+  points.forEach(p=>{
+    lat+=p.lat;
+    lng+=p.lng;
+  });
+
+  lat/=points.length;
+  lng/=points.length;
+
+  await set(ref(db,"points/"+qrId+"/reference"),{
+    lat,lng,createdAt:Date.now()
+  });
+
+  setStatus("Referans Kaydedildi ✅","good");
 }
 
-async function registerReference(){
+async function checkQR(qrId){
 
-  const location = await getLocation();
+  if(scanLock) return;
+  scanLock=true;
+  setTimeout(()=>scanLock=false,3000);
 
-  if(location.accuracy > 50){
-    setStatus("GPS doğruluğu zayıf. Sabit durun.","bad");
+  const snapshot=await get(ref(db,"points/"+qrId+"/reference"));
+
+  if(!snapshot.exists()){
+    await createReference(qrId);
     return;
   }
 
-  locations.push(location);
-  locationCount++;
+  const refPoint=snapshot.val();
+  const loc=await getLocation();
 
-  setStatus(locationCount + "/3 konum alındı","info");
+  if(loc.accuracy>25){
+    setStatus("GPS zayıf. Açık alana geçin.","bad");
+    return;
+  }
 
-  if(locationCount === 3){
-    const avg = calculateAverage(locations);
+  const d=distance(refPoint.lat,refPoint.lng,loc.lat,loc.lng);
 
-    await set(ref(db,"points/"+currentQR+"/reference"),{
-      lat:avg.lat,
-      lng:avg.lng,
-      createdAt:Date.now()
-    });
+  const logRef=push(ref(db,"points/"+qrId+"/logs"));
+  await set(logRef,{
+    lat:loc.lat,
+    lng:loc.lng,
+    distance:d,
+    accuracy:loc.accuracy,
+    time:Date.now()
+  });
 
-    setStatus("Referans Kaydedildi ✅","good");
+  if(d<=12){
+    setStatus("GÜVENLİ DEVRİYE ✅","good");
+  }else{
+    setStatus("GÜVENSİZ DEVRİYE ❌","bad");
   }
 }
 
 function resetSystem(){
-  currentQR = null;
-  referenceExists = false;
-  locationCount = 0;
-  locations = [];
   setStatus("Sistem sıfırlandı.","info");
 }
 
-window.onScanSuccess = async(decodedText)=>{
-  if(!currentQR){
-    await processQR(decodedText);
-  } else if(!referenceExists && locationCount < 3){
-    await registerReference();
-  }
+window.onScanSuccess=(text)=>{
+  checkQR(text);
 };
 
-const html5QrcodeScanner = new Html5QrcodeScanner(
-  "reader",{fps:10,qrbox:250}
-);
-html5QrcodeScanner.render(window.onScanSuccess);
+const scanner=new Html5QrcodeScanner("reader",{fps:10,qrbox:250});
+scanner.render(window.onScanSuccess);
 
 </script>
 </body>
